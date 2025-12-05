@@ -1,0 +1,29 @@
+menu "BMS Updater Configuration"
+
+    config ESP_WIFI_SSID
+        string "WiFi SSID"
+        default "ESP32_BMS_Updater"
+        help
+            SSID (Network Name) for the ESP32 SoftAP.
+
+    config ESP_WIFI_PASSWORD
+        string "WiFi Password"
+        default "password123"
+        help
+            Password for the ESP32 SoftAP. Leave empty for Open Network.
+
+    config ESP_WIFI_CHANNEL
+        int "WiFi Channel"
+        range 1 13
+        default 1
+        help
+            Channel of the ESP32 SoftAP.
+
+    config ESP_MAX_STA_CONN
+        int "Max Station Connections"
+        range 1 10
+        default 4
+        help
+            Max number of devices that can connect to the SoftAP.
+
+endmenu
