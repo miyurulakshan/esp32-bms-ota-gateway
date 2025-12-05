@@ -1,179 +1,138 @@
 #ifndef WEB_PAGE_H
 #define WEB_PAGE_H
 
-const char* index_html = 
-"<!DOCTYPE html>"
-"<html>"
-"<head>"
-    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<title>ESP32 BMS Flasher</title>"
-    "<style>"
-        "* { margin: 0; padding: 0; box-sizing: border-box; }"
-        "body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #fff; padding: 20px; }"
-        ".container { max-width: 800px; margin: 0 auto; }"
-        "h1 { text-align: center; color: #00ff88; margin-bottom: 20px; font-size: 24px; }"
-        ".card { background: #252525; padding: 20px; border-radius: 10px; border: 1px solid #333; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }"
-        "h2 { font-size: 18px; border-bottom: 1px solid #444; padding-bottom: 10px; margin-bottom: 15px; color: #ccc; }"
+const char index_html[] = R"rawliteral(
+<!DOCTYPE HTML><html>
+<head>
+  <title>ESP32 BMS OTA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial; text-align: center; margin: 20px; }
+    #progressBar { width: 100%; background-color: #ddd; }
+    #bar { width: 0%; height: 30px; background-color: #4CAF50; text-align: center; line-height: 30px; color: white; }
+    .btn { background-color: #008CBA; border: none; color: white; padding: 15px 32px; font-size: 16px; margin: 10px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h2>BMS Firmware Updater</h2>
+  
+  <input type="file" id="firmware_file" accept=".bin"><br><br>
+  <button class="btn" onclick="uploadFirmware()">1. Upload & Verify</button>
+  <button class="btn" onclick="flashFirmware()">2. Flash to BMS</button>
+  
+  <br><br>
+  <div id="progressBar"><div id="bar">0%</div></div>
+  <p id="status">Status: Idle</p>
+
+  <script>
+    // --- SHA-256 IMPLEMENTATION (Pure JS for HTTP Compatibility) ---
+    var sha256=function a(b){function c(a,b){return a>>>b|a<<32-b}for(var d,e,f=Math.pow,g=f(2,32),h="length",i="",j=[],k=8*b[h],l=a.h=a.h||[],m=a.k=a.k||[],n=m[h],o={},p=2;64>n;p++)if(!o[p]){for(d=0;313>d;d+=p)o[d]=p;l[n]=f(p,.5)*g|0,m[n++]=f(p,1/3)*g|0}for(b+="\x80";b[h]%64-56;)b+="\x00";for(d=0;d<b[h];d++){if(e=b.charCodeAt(d),e>>8)return;j[d>>2]|=e<<(3-d)%4*8}for(j[j[h]]=k/g|0,j[j[h]]=k,e=0;e<j[h];){var q=l.slice(d=0),r=j.slice(e,e+=16),s=q;for(a.h=q;64>d;d++)q=s[7]+(c(d=s[4],6)^c(d,11)^c(d,25))+(d&s[5]^~d&s[6])+m[d]+(r[d]=16>d?r[d]:r[d-2]+(c(d=r[d-15],7)^c(d,18)^d>>>3)+r[d-7]+(c(d=r[d-2],17)^c(d,19)^d>>>10)|0),s=[q+((c(d=s[0],2)^c(d,13)^c(d,22))+(d&s[1]^d&s[2]^s[1]&s[2]))|0].concat(s),s[4]=s[4]+q|0;for(d=0;8>d;d++)l[d]=l[d]+s[d]|0}for(d=0;8>d;d++)for(e=3;e+1;e--){var t=l[d]>>8*e&255;i+=(16>t?0:"")+t.toString(16)}return i};
+    // ---------------------------------------------------------------
+
+    function updateStatus(msg) {
+      document.getElementById("status").innerText = "Status: " + msg;
+    }
+
+    // 1. READ FILE -> HASH -> UPLOAD
+    function uploadFirmware() {
+      var fileInput = document.getElementById('firmware_file');
+      var file = fileInput.files[0];
+      if (!file) { alert("Please select a .bin file"); return; }
+
+      updateStatus("Reading file...");
+      
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var rawData = e.target.result; // This is an ArrayBuffer
         
-        "textarea { width: 100%; padding: 12px; background: #161625; color: #0f0; border: 1px solid #444; border-radius: 5px; font-family: monospace; resize: vertical; margin-top: 10px; }"
+        // Convert ArrayBuffer to Binary String for the SHA256 function
+        var binaryString = "";
+        var bytes = new Uint8Array(rawData);
+        var len = bytes.byteLength;
+        for (var i = 0; i < len; i++) {
+          binaryString += String.fromCharCode(bytes[i]);
+        }
+
+        // Calculate Hash locally
+        updateStatus("Calculating SHA-256...");
+        var hashHex = sha256(binaryString);
+        console.log("Client Hash:", hashHex);
+
+        // Prepare Hex String for Upload (Your existing logic requirement)
+        var hexPayload = "";
+        for (var i = 0; i < len; i++) {
+            var hex = bytes[i].toString(16);
+            if(hex.length < 2) hex = "0" + hex;
+            hexPayload += hex;
+        }
+
+        // Send
+        updateStatus("Uploading...");
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/upload", true);
         
-        /* NEW FILE INPUT STYLING */
-        ".file-input-wrapper { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }"
-        "input[type='file'] { background: #333; color: #fff; padding: 8px; border-radius: 5px; border: 1px solid #555; width: 100%; cursor: pointer; }"
+        // !!! VITAL HEADER !!!
+        xhr.setRequestHeader("X-Payload-SHA256", hashHex); 
         
-        ".btn { background: #00ff88; color: #000; padding: 12px; border: none; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; font-size: 16px; margin-top: 15px; transition: 0.2s; }"
-        ".btn:hover { background: #00cc6a; }"
-        ".btn:disabled { background: #555; color: #888; cursor: not-allowed; }"
+        xhr.onload = function() {
+          if (xhr.status === 200) {
+            var resp = JSON.parse(xhr.responseText);
+            updateStatus("Verified! Size: " + resp.size + " bytes. Ready to Flash.");
+            document.getElementById("bar").style.width = "100%";
+            document.getElementById("bar").innerHTML = "100%";
+          } else {
+            updateStatus("Error: " + xhr.statusText);
+            alert("Upload Failed: " + xhr.responseText);
+          }
+        };
         
-        ".progress-bg { width: 100%; background-color: #444; border-radius: 5px; margin-top: 15px; height: 30px; overflow: hidden; position: relative; }"
-        ".progress-fill { width: 0%; height: 100%; background-color: #00ff88; transition: width 0.5s; }"
-        ".progress-text { position: absolute; width: 100%; height: 100%; top: 0; left: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; mix-blend-mode: difference; }"
-        ".status-row { display: flex; justify-content: space-between; margin-top: 10px; font-family: monospace; color: #aaa; font-size: 14px; }"
-        ".highlight { color: #00ff88; }"
-    "</style>"
-"</head>"
-"<body>"
-    "<div class='container'>"
-        "<h1>Vega BMS Updater</h1>"
-        
-        "<div class='card'>"
-            "<h2>1. Upload Firmware as txt or paste in the box</h2>"
-            
-            ""
-            "<div class='file-input-wrapper'>"
-                "<input type='file' id='fileInput' accept='.txt,.hex,.csv'>"
-            "</div>"
-            
-            "<textarea id='hexInput' rows='8' placeholder='Select a file above OR Paste Data Here...'></textarea>"
-            "<button class='btn' id='uploadBtn' onclick='uploadFirmware()'>Upload & Verify</button>"
-            "<div class='status-row'>"
-                "<span>Status: <span id='uploadStatus' class='highlight'>Idle</span></span>"
-                "<span>RAM Usage: <span id='ramSize'>0</span> bytes</span>"
-            "</div>"
-        "</div>"
+        xhr.send(hexPayload);
+      };
+      reader.readAsArrayBuffer(file);
+    }
 
-        "<div class='card'>"
-            "<h2>2. Update the BMS</h2>"
-            "<p style='color:#888; font-size: 13px; margin-bottom: 10px;'>Ensure CAN bus is connected before starting.</p>"
-            "<button class='btn' id='flashBtn' onclick='startFlash()' disabled>Start Update</button>"
-            
-            "<div class='progress-bg'>"
-                "<div id='progressBar' class='progress-fill'></div>"
-                "<div id='progressText' class='progress-text'>0%</div>"
-            "</div>"
-            
-            "<div class='status-row'>"
-                "<span>System: <span id='sysState' class='highlight'>Idle</span></span>"
-                "<span>Progress: <span id='sentBytes'>0</span> / <span id='totalBytes'>0</span></span>"
-            "</div>"
-        "</div>"
-    "</div>"
+    // 2. TRIGGER FLASH
+    function flashFirmware() {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/flash", true);
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          updateStatus("Flashing Started...");
+          startPolling();
+        } else {
+          alert("Failed to start flash");
+        }
+      };
+      xhr.send();
+    }
 
-    "<script>"
-        "let isFlashing = false;"
-        "let pollInterval = null;"
-        
-        // --- FILE READER LOGIC ---
-        "document.getElementById('fileInput').addEventListener('change', function(e) {"
-            "let file = e.target.files[0];"
-            "if (!file) return;"
+    function startPolling() {
+      var interval = setInterval(function() {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", "/api/status", true);
+        xhr.onload = function() {
+          if (xhr.status === 200) {
+            var json = JSON.parse(xhr.responseText);
+            updateStatus(json.status);
             
-            "let reader = new FileReader();"
-            "reader.onload = function(e) {"
-                "document.getElementById('hexInput').value = e.target.result;"
-                "alert('File loaded! Click Upload & Verify to proceed.');"
-            "};"
-            "reader.readAsText(file);"
-        "});"
-        // -------------------------
+            if (json.total > 0) {
+              var percent = (json.sent / json.total) * 100;
+              document.getElementById("bar").style.width = percent + "%";
+              document.getElementById("bar").innerHTML = Math.round(percent) + "%";
+            }
 
-        "function cleanHex(input) {"
-            "let clean = input.replace(/0x/gi, '');"
-            "clean = clean.replace(/[^0-9A-Fa-f]/g, '');"
-            "return clean;"
-        "}"
-
-        "function uploadFirmware() {"
-            "let raw = document.getElementById('hexInput').value;"
-            "let hex = cleanHex(raw);"
-            
-            "if(hex.length % 2 !== 0 || hex.length === 0) { alert('Invalid Data (Odd length)! Check your input.'); return; }"
-            "if(hex.length > 200000) { alert('File too large (>100KB binary)!'); return; }"
-            
-            "document.getElementById('uploadBtn').disabled = true;"
-            "document.getElementById('uploadStatus').innerText = 'Uploading...';"
-            
-            "fetch('/api/upload', { method: 'POST', body: hex })"
-            ".then(r => { if(r.ok) return r.json(); throw new Error(r.statusText); })"
-            ".then(d => {"
-                "document.getElementById('uploadStatus').innerText = 'Verified';"
-                "document.getElementById('ramSize').innerText = d.size;"
-                "document.getElementById('flashBtn').disabled = false;"
-                "document.getElementById('uploadBtn').disabled = false;"
-                "document.getElementById('totalBytes').innerText = d.size;"
-                "alert('Firmware loaded into RAM successfully.');"
-            "}).catch(e => {"
-                "document.getElementById('uploadStatus').innerText = 'Error';"
-                "document.getElementById('uploadBtn').disabled = false;"
-                "alert('Upload Failed: ' + e);"
-            "});"
-        "}"
-
-        "function startFlash() {"
-            "if(!confirm('Start BMS Update? Do not power off.')) return;"
-            
-            "isFlashing = true;"
-            "document.getElementById('flashBtn').disabled = true;"
-            "document.getElementById('uploadBtn').disabled = true;"
-            "document.getElementById('hexInput').disabled = true;"
-            "document.getElementById('fileInput').disabled = true;" // Disable file input too
-            "document.getElementById('sysState').innerText = 'Starting...';"
-            
-            "fetch('/api/flash', { method: 'POST' })"
-            ".then(r => { if(r.ok) return r.json(); throw new Error('Busy'); })"
-            ".then(d => {"
-                "if(pollInterval) clearInterval(pollInterval);"
-                "pollInterval = setInterval(pollStatus, 500);" 
-            "}).catch(e => {"
-                "alert('Could not start flash: ' + e);"
-                "isFlashing = false;"
-                "document.getElementById('flashBtn').disabled = false;"
-                "document.getElementById('uploadBtn').disabled = false;"
-                "document.getElementById('hexInput').disabled = false;"
-                "document.getElementById('fileInput').disabled = false;"
-            "});"
-        "}"
-
-        "function pollStatus() {"
-            "fetch('/api/status')"
-            ".then(r => r.json())"
-            ".then(d => {"
-                "document.getElementById('sysState').innerText = d.status;"
-                "document.getElementById('sentBytes').innerText = d.sent;"
-                "document.getElementById('totalBytes').innerText = d.total;"
-                
-                "let pct = 0;"
-                "if(d.total > 0) pct = Math.round((d.sent / d.total) * 100);"
-                "if(pct > 100) pct = 100;"
-                
-                "document.getElementById('progressBar').style.width = pct + '%';"
-                "document.getElementById('progressText').innerText = pct + '%';"
-
-                "if (d.busy === false && isFlashing) {"
-                    "clearInterval(pollInterval);"
-                    "isFlashing = false;"
-                    "document.getElementById('uploadBtn').disabled = false;"
-                    "document.getElementById('hexInput').disabled = false;"
-                    "document.getElementById('fileInput').disabled = false;"
-                    "document.getElementById('flashBtn').disabled = true;"
-                    
-                    "if(d.status.includes('Success')) alert('Update Complete Successfully!');"
-                    "else alert('Update Failed: ' + d.status);"
-                "}"
-            "}).catch(e => console.log('Poll error', e));"
-        "}"
-    "</script>"
-"</body>"
-"</html>";
+            if (json.busy === false && json.sent >= json.total && json.total > 0) {
+              clearInterval(interval);
+              alert("Update Complete!");
+            }
+          }
+        };
+        xhr.send();
+      }, 1000);
+    }
+  </script>
+</body>
+</html>
+)rawliteral";
 
 #endif

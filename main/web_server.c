@@ -1,15 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>             // Required for toupper/tolower comparisons
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "cJSON.h"
-#include "test_data.h"
+#include "mbedtls/sha256.h"    // Standard ESP-IDF Crypto Library
 
-// Assuming these exist in your project structure - 
+// Assuming these exist in your project structure
 #include "app_shared.h" 
 #include "web_page.h"
-#include "can_manager.h" // Assuming start_can_update_task() is here
+#include "can_manager.h" 
 
 static const char *TAG = "WEB";
 
@@ -36,13 +37,23 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// 1. UPLOAD HANDLER
+// 1. UPLOAD HANDLER (Modified for SHA-256 Integrity)
 static esp_err_t upload_post_handler(httpd_req_t *req) {
     if (SYSTEM_IS_BUSY) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "System Busy Flashing");
         return ESP_FAIL;
     }
 
+    // 1. GET CHECKSUM HEADER
+    // The browser must calculate SHA-256 of the binary and send it in this header
+    char header_hash[65] = {0};
+    if (httpd_req_get_hdr_value_str(req, "X-Payload-SHA256", header_hash, sizeof(header_hash)) != ESP_OK) {
+        ESP_LOGE(TAG, "Security Error: Missing X-Payload-SHA256 header");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing Integrity Header");
+        return ESP_FAIL;
+    }
+
+    // 2. RECEIVE DATA
     int total_len = req->content_len;
     int cur_len = 0;
     int received = 0;
@@ -50,27 +61,39 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
     // JS cleans the string, so we assume 2 hex chars = 1 byte
     size_t binary_size = total_len / 2;
 
+    // Reset Buffer
     if (firmware_buffer) free(firmware_buffer);
     firmware_buffer = malloc(binary_size);
     if (!firmware_buffer) {
-        ESP_LOGE(TAG, "OOM");
+        ESP_LOGE(TAG, "OOM: Failed to allocate %d bytes", binary_size);
         httpd_resp_send_500(req);
         return ESP_FAIL;
     }
 
     char *chunk = malloc(1024);
+    if (!chunk) {
+        free(firmware_buffer);
+        firmware_buffer = NULL;
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
     size_t binary_idx = 0;
     char high_nibble = 0;
     bool have_high = false;
 
+    // Stream Loop
     while (cur_len < total_len) {
         received = httpd_req_recv(req, chunk, 1024);
         if (received <= 0) {
+            // Connection closed or error
             free(chunk);
+            free(firmware_buffer);
+            firmware_buffer = NULL;
             return ESP_FAIL;
         }
 
-        // Parse Hex Stream
+        // On-the-fly Hex -> Binary Conversion
         for (int i = 0; i < received; i++) {
             if (!have_high) {
                 high_nibble = hex2int(chunk[i]);
@@ -88,56 +111,55 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
     firmware_len = binary_idx;
     ota_total_size = firmware_len;
     
-    // ... (This is inside upload_post_handler, after firmware_len is set) ...
+    ESP_LOGI(TAG, "Download Complete. Size: %d bytes. Verifying Integrity...", firmware_len);
 
-    ESP_LOGI(TAG, "Stored %d bytes. Starting Verification...", firmware_len);
+    // 3. CALCULATE SHA-256 OF RECEIVED DATA
+    unsigned char local_hash_bin[32];
+    mbedtls_sha256_context ctx;
+    
+    mbedtls_sha256_init(&ctx);
+    // 0 = SHA-256 (not 224)
+    mbedtls_sha256_starts(&ctx, 0); 
+    mbedtls_sha256_update(&ctx, firmware_buffer, firmware_len);
+    mbedtls_sha256_finish(&ctx, local_hash_bin);
+    mbedtls_sha256_free(&ctx);
 
-    // --- START VERIFICATION LOGIC ---
-    
-    // 1. Check Size
-    size_t expected_size = sizeof(EXPECTED_DATA);
-    
-    if (firmware_len != expected_size) {
-        ESP_LOGE(TAG, "SIZE MISMATCH! Expected: %d, Got: %d", expected_size, firmware_len);
-    } 
-    else {
-        // 2. Check Content (Fast Compare)
-        int result = memcmp(firmware_buffer, EXPECTED_DATA, firmware_len);
-        
-        if (result == 0) {
-            // SUCCESS
-            ESP_LOGW(TAG, "------------------------------------------------");
-            ESP_LOGW(TAG, "✅ SUCCESS: DATA IS 100%% ACCURATE");
-            ESP_LOGW(TAG, "------------------------------------------------");
-        } 
-        else {
-            // FAILURE - FIND THE EXACT ERROR
-            ESP_LOGE(TAG, "❌ DATA CONTENT MISMATCH! Finding first error...");
-            
-            for (size_t i = 0; i < firmware_len; i++) {
-                if (firmware_buffer[i] != EXPECTED_DATA[i]) {
-                    ESP_LOGE(TAG, "Error at Index [%d] (Address 0x%X)", i, i);
-                    ESP_LOGE(TAG, " -> Expected: 0x%02X", EXPECTED_DATA[i]);
-                    ESP_LOGE(TAG, " -> Received: 0x%02X", firmware_buffer[i]);
-                    break; // Stop at first error to avoid spamming
-                }
-            }
-        }
+    // 4. CONVERT LOCAL HASH TO HEX STRING
+    char local_hash_str[65];
+    for (int i = 0; i < 32; i++) {
+        sprintf(&local_hash_str[i * 2], "%02x", local_hash_bin[i]);
     }
-    // --- END VERIFICATION LOGIC ---
+    local_hash_str[64] = '\0'; // Null terminate
 
-    char resp[64];
-    
-    snprintf(resp, 64, "{\"size\": %d}", firmware_len);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, resp, strlen(resp));
-    return ESP_OK;
+    // 5. COMPARE HASHES (Case Insensitive)
+    if (strcasecmp(header_hash, local_hash_str) == 0) {
+        ESP_LOGI(TAG, "✅ INTEGRITY PASS: SHA-256 matches.");
+        ESP_LOGI(TAG, "Hash: %s", local_hash_str);
+        
+        char resp[64];
+        snprintf(resp, 64, "{\"status\": \"success\", \"size\": %d}", firmware_len);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, resp, strlen(resp));
+        return ESP_OK;
+    } else {
+        ESP_LOGE(TAG, "❌ INTEGRITY FAIL: Checksum mismatch!");
+        ESP_LOGE(TAG, "Expected (Browser): %s", header_hash);
+        ESP_LOGE(TAG, "Calculated (ESP32): %s", local_hash_str);
+
+        // Security: Discard the corrupted buffer immediately
+        free(firmware_buffer);
+        firmware_buffer = NULL;
+        firmware_len = 0;
+
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Data Integrity Failed - Checksum Mismatch");
+        return ESP_FAIL;
+    }
 }
 
 // 2. FLASH TRIGGER HANDLER
 static esp_err_t flash_post_handler(httpd_req_t *req) {
     if (!firmware_buffer || firmware_len == 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No Data");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No Valid Firmware Loaded");
         return ESP_FAIL;
     }
 
@@ -151,7 +173,7 @@ static esp_err_t flash_post_handler(httpd_req_t *req) {
     ota_sent_bytes = 0;
     strcpy(ota_status_msg, "Starting...");
 
-    // Start CAN Task (Ensure this function is defined in can_manager.c)
+    // Start CAN Task
     if (start_can_update_task() != ESP_OK) {
         SYSTEM_IS_BUSY = false;
         httpd_resp_send_500(req);
@@ -179,7 +201,9 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
 
 httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 8192;
+    // Increase stack size if needed for heavy SHA256 ops, 
+    // though 8192 is usually sufficient.
+    config.stack_size = 8192; 
     httpd_handle_t server = NULL;
 
     if (httpd_start(&server, &config) == ESP_OK) {
