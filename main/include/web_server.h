@@ -3,7 +3,7 @@
 
 #include <esp_http_server.h>
 
-// Starts the web server and registers all URI handlers
+// Starts the web server and registers all URI handler
 httpd_handle_t start_webserver(void);
 
 // Stops the web server
