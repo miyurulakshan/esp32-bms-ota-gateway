@@ -58,7 +58,7 @@ static void send_frame(uint32_t id, uint8_t *data, uint8_t len) {
     memcpy(tx_msg.data, data, len);
     
     // --- VERBOSE LOGGING: SENDING ---
-    ESP_LOGI(TAG, "TX ID: 0x%06lX Data: %02X %02X %02X %02X %02X %02X %02X %02X", 
+    ESP_LOGI(TAG, ">> TX ID: 0x%06lX Data: %02X %02X %02X %02X %02X %02X %02X %02X", 
              id, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
     // --------------------------------
 
@@ -76,7 +76,7 @@ static bool wait_for_bms_ack(uint32_t timeout_ms) {
         if (twai_receive(&rx_msg, 10) == ESP_OK) { 
             
             // --- VERBOSE LOGGING: RECEIVING ---
-            ESP_LOGI(TAG, "RX ID: 0x%06lX Data: %02X %02X %02X %02X %02X %02X %02X %02X", 
+            ESP_LOGI(TAG, "<< RX ID: 0x%06lX Data: %02X %02X %02X %02X %02X %02X %02X %02X", 
                      rx_msg.identifier, 
                      rx_msg.data[0], rx_msg.data[1], rx_msg.data[2], rx_msg.data[3], 
                      rx_msg.data[4], rx_msg.data[5], rx_msg.data[6], rx_msg.data[7]);
@@ -100,27 +100,32 @@ void ota_task(void *arg) {
     uint8_t data[8] = {0};
 
     // 1. Handshake
-    ESP_LOGI(TAG, "Sending Handshake...");
+    ESP_LOGI(TAG, "--- STEP 1: HANDSHAKE ---");
     data[0] = 0x01;
     send_frame(ID_HANDSHAKE, data, 8);
     
-    // PRODUCTION: CRITICAL CHECK
     if (!wait_for_bms_ack(2000)) { 
         ESP_LOGE(TAG, "ERROR: No BMS Response (Handshake Timeout)");
         strcpy(ota_status_msg, "Error: No BMS Connection");
         goto cleanup_error;
     }
+    ESP_LOGI(TAG, "✅ HANDSHAKE COMPLETE");
 
     // 2. Meta Data (Size)
-    ESP_LOGI(TAG, "Sending Size...");
+    ESP_LOGI(TAG, "--- STEP 2: SEND SIZE ---");
     data[0] = firmware_len & 0xFF; data[1] = firmware_len >> 8;
     send_frame(ID_SIZE, data, 8);
-    // Note: Logging for RX happens inside wait_for_bms_ack
     
-    vTaskDelay(pdMS_TO_TICKS(100)); // Small delay for BMS processing
+    // ADDED: Wait for ACK here too so you can see it printing
+    if (!wait_for_bms_ack(1000)) {
+        ESP_LOGW(TAG, "Warning: BMS didn't ACK size (Might be normal for some BMS)");
+        // We don't abort here just in case, but now you will see the packet if it exists
+    } else {
+        ESP_LOGI(TAG, "✅ SIZE ACCEPTED");
+    }
 
     // 3. Start Command
-    ESP_LOGI(TAG, "Sending Start Command...");
+    ESP_LOGI(TAG, "--- STEP 3: START COMMAND ---");
     memset(data, 0, 8);
     data[0] = 0x69; data[1] = 0x32;
     send_frame(ID_START, data, 8);
@@ -130,16 +135,15 @@ void ota_task(void *arg) {
         strcpy(ota_status_msg, "Error: Start Rejected");
         goto cleanup_error;
     }
+    ESP_LOGI(TAG, "✅ START ACKNOWLEDGED - BEGINNING FLASH");
 
     // 4. DATA TRANSMISSION LOOP
     strcpy(ota_status_msg, "Flashing...");
     ota_sent_bytes = 0;
     
-    ESP_LOGI(TAG, "Starting Data Transfer (%d bytes)", firmware_len);
-
     while (ota_sent_bytes < firmware_len) {
         
-        // Send Burst: 2 Packets (12 bytes data + CRCs)
+        // Send Burst: 2 Packets
         for (int i = 0; i < 2; i++) {
             if (ota_sent_bytes >= firmware_len) break;
 
@@ -149,7 +153,6 @@ void ota_task(void *arg) {
 
             memcpy(chunk, &firmware_buffer[ota_sent_bytes], len);
             
-            // Calculate CRC for this chunk
             uint16_t crc = calc_crc_custom(chunk, 6);
             chunk[6] = crc & 0xFF; chunk[7] = crc >> 8;
 
@@ -158,7 +161,7 @@ void ota_task(void *arg) {
         }
         
         // Wait for ACK
-        if (!wait_for_bms_ack(500)) { // 500ms timeout
+        if (!wait_for_bms_ack(500)) { 
             ESP_LOGE(TAG, "ERROR: Write Timeout at offset %ld", ota_sent_bytes);
             strcpy(ota_status_msg, "Error: Write Timeout");
             goto cleanup_error;
@@ -166,9 +169,8 @@ void ota_task(void *arg) {
     }
 
     strcpy(ota_status_msg, "Success");
-    ESP_LOGI(TAG, "UPDATE COMPLETE SUCCESSFULLY");
+    ESP_LOGI(TAG, "✅ UPDATE COMPLETE SUCCESSFULLY");
 
-    // Fall through to cleanup
     goto cleanup_success;
 
 cleanup_error:
@@ -186,17 +188,11 @@ cleanup_success:
     vTaskDelete(NULL);
 }
 
-// --- START FUNCTION (Pinned to Core 1) ---
+// --- START FUNCTION ---
 esp_err_t start_can_update_task(void) {
     TaskHandle_t task_handle;
     BaseType_t res = xTaskCreatePinnedToCore(
-        ota_task,         
-        "ota_can_task",   
-        4096,             
-        NULL,             
-        20,               // High Priority
-        &task_handle,     
-        1                 // Core 1
+        ota_task, "ota_can_task", 4096, NULL, 20, &task_handle, 1 
     );
     return (res == pdPASS) ? ESP_OK : ESP_FAIL;
 }

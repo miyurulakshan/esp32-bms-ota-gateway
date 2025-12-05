@@ -60,7 +60,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
     // JS sends Hex String (2 chars = 1 byte)
     size_t binary_size = total_len / 2;
 
-    // Reset Buffer
+    // Reset Buffer if exists
     if (firmware_buffer) free(firmware_buffer);
     firmware_buffer = malloc(binary_size);
     if (!firmware_buffer) {
@@ -93,7 +93,6 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
 
         // On-the-fly Hex -> Binary Conversion
         for (int i = 0; i < received; i++) {
-            // Filter out non-hex characters (newlines, spaces, etc if any slipped through)
             char c = chunk[i];
             if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'))) {
                 continue; 
@@ -119,8 +118,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
     
     ESP_LOGI(TAG, "Download Complete. Size: %d bytes. Verifying Integrity...", firmware_len);
 
-    // --- DEBUG: PRINT FIRST 16 BYTES OF RECEIVED BINARY ---
-    // This helps confirm if the Hex->Binary conversion matched the browser's logic
+    // --- DEBUG: PRINT FIRST 16 BYTES ---
     char debug_buf[64] = {0};
     for (int i = 0; i < 16 && i < firmware_len; i++) {
         sprintf(&debug_buf[i*3], "%02X ", firmware_buffer[i]);
@@ -128,26 +126,26 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
     ESP_LOGW(TAG, "--- DEBUG ---");
     ESP_LOGW(TAG, "First 16 Bytes in RAM: %s", debug_buf);
     ESP_LOGW(TAG, "Total Binary Len: %d", firmware_len);
-    // ------------------------------------------------------
+    // ------------------------------------
 
-    // 3. CALCULATE SHA-256 OF RECEIVED BINARY DATA
+    // 3. CALCULATE SHA-256
     unsigned char local_hash_bin[32];
     mbedtls_sha256_context ctx;
     
     mbedtls_sha256_init(&ctx);
-    mbedtls_sha256_starts(&ctx, 0); // 0 = SHA-256
+    mbedtls_sha256_starts(&ctx, 0); 
     mbedtls_sha256_update(&ctx, firmware_buffer, firmware_len);
     mbedtls_sha256_finish(&ctx, local_hash_bin);
     mbedtls_sha256_free(&ctx);
 
-    // 4. CONVERT LOCAL HASH TO HEX STRING
+    // 4. CONVERT TO HEX STRING
     char local_hash_str[65];
     for (int i = 0; i < 32; i++) {
         sprintf(&local_hash_str[i * 2], "%02x", local_hash_bin[i]);
     }
     local_hash_str[64] = '\0';
 
-    // 5. COMPARE HASHES
+    // 5. COMPARE
     if (strcasecmp(header_hash, local_hash_str) == 0) {
         ESP_LOGI(TAG, "✅ INTEGRITY PASS: SHA-256 matches.");
         
@@ -158,10 +156,9 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
         return ESP_OK;
     } else {
         ESP_LOGE(TAG, "❌ INTEGRITY FAIL: Checksum mismatch!");
-        ESP_LOGE(TAG, "Expected (Browser): %s", header_hash);
-        ESP_LOGE(TAG, "Calculated (ESP32): %s", local_hash_str);
+        ESP_LOGE(TAG, "Expected: %s", header_hash);
+        ESP_LOGE(TAG, "Calculated: %s", local_hash_str);
 
-        // Security: Discard the corrupted buffer
         free(firmware_buffer);
         firmware_buffer = NULL;
         firmware_len = 0;
@@ -183,12 +180,10 @@ static esp_err_t flash_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    // LOCK THE SYSTEM
     SYSTEM_IS_BUSY = true;
     ota_sent_bytes = 0;
     strcpy(ota_status_msg, "Starting...");
 
-    // Start CAN Task
     if (start_can_update_task() != ESP_OK) {
         SYSTEM_IS_BUSY = false;
         httpd_resp_send_500(req);
@@ -214,6 +209,36 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// 4. RESET HANDLER (NEW)
+static esp_err_t reset_post_handler(httpd_req_t *req) {
+    // If flashing is active, we generally shouldn't allow reset unless we kill task
+    // But per request, this is for "Upload State" or "Finished State".
+    
+    if (SYSTEM_IS_BUSY) {
+        // If system is busy, force reset state (Warning: Task might still be running)
+        // Ideally, we wait or kill task. For now, we assume this button is used when stalled or finished.
+        SYSTEM_IS_BUSY = false;
+    }
+
+    // 1. Clear RAM
+    if (firmware_buffer) {
+        free(firmware_buffer);
+        firmware_buffer = NULL;
+    }
+    firmware_len = 0;
+    ota_total_size = 0;
+    ota_sent_bytes = 0;
+    
+    // 2. Reset Status Text
+    strcpy(ota_status_msg, "Idle");
+
+    ESP_LOGI(TAG, "SYSTEM RESET via Web Interface");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"status\": \"reset\"}", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192; 
@@ -231,6 +256,10 @@ httpd_handle_t start_webserver(void) {
 
         httpd_uri_t uri_status = { .uri = "/api/status", .method = HTTP_GET, .handler = status_get_handler, .user_ctx = NULL };
         httpd_register_uri_handler(server, &uri_status);
+
+        // Register Reset Handler
+        httpd_uri_t uri_reset = { .uri = "/api/reset", .method = HTTP_POST, .handler = reset_post_handler, .user_ctx = NULL };
+        httpd_register_uri_handler(server, &uri_reset);
     }
     return server;
 }

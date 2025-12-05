@@ -20,6 +20,8 @@ const char* index_html =
         ".btn { background: #00ff88; color: #000; padding: 12px; border: none; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; font-size: 16px; margin-top: 15px; transition: 0.2s; }"
         ".btn:hover { background: #00cc6a; }"
         ".btn:disabled { background: #555; color: #888; cursor: not-allowed; }"
+        ".btn-red { background: #ff4444; color: white; margin-top: 10px; }"
+        ".btn-red:hover { background: #cc0000; }"
         ".progress-bg { width: 100%; background-color: #444; border-radius: 5px; margin-top: 15px; height: 30px; overflow: hidden; position: relative; }"
         ".progress-fill { width: 0%; height: 100%; background-color: #00ff88; transition: width 0.5s; }"
         ".progress-text { position: absolute; width: 100%; height: 100%; top: 0; left: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; mix-blend-mode: difference; }"
@@ -54,11 +56,13 @@ const char* index_html =
                 "<span>System: <span id='sysState' class='highlight'>Idle</span></span>"
                 "<span>Progress: <span id='sentBytes'>0</span> / <span id='totalBytes'>0</span></span>"
             "</div>"
+            // RESET BUTTON
+            "<button class='btn btn-red' id='resetBtn' onclick='resetSystem()'>Reset System</button>"
         "</div>"
     "</div>"
 
     "<script>"
-        // --- 1. HEX TO BYTES (Fixed: returns Uint8Array) ---
+        // --- 1. HEX TO BYTES ---
         "function hexToBytes(hex) {"
             "if (hex.length % 2 !== 0) throw new Error('Odd hex length');"
             "var bytes = new Uint8Array(hex.length / 2);"
@@ -68,21 +72,18 @@ const char* index_html =
             "return bytes;"
         "}"
 
-        // --- 2. ROBUST SHA-256 (Fixed: Accepts Uint8Array directly) ---
+        // --- 2. ROBUST SHA-256 ---
         "async function calculateHash(byteArray) {"
-            // Use browser crypto API if available (Secure Context / Localhost)
             "if (window.crypto && window.crypto.subtle) {"
                 "const hashBuffer = await crypto.subtle.digest('SHA-256', byteArray);"
                 "const hashArray = Array.from(new Uint8Array(hashBuffer));"
                 "return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');"
             "}"
-            // Fallback for HTTP (Pure JS)
             "else {"
                 "return sha256_fallback(byteArray);"
             "}"
         "}"
         
-        // Pure JS Fallback (Modified to handle Uint8Array input correctly)
         "var sha256_fallback = function(data) {"
             "function rightRotate(value, amount) { return (value>>>amount) | (value<<(32 - amount)); };"
             "var mathPow = Math.pow; var maxWord = mathPow(2, 32); "
@@ -148,15 +149,8 @@ const char* index_html =
             "document.getElementById('uploadStatus').innerText = 'Calculating Hash...';"
             
             "setTimeout(async function() {"
-                // 1. Convert HEX String -> Uint8Array (Raw Bytes)
                 "try {"
                     "var rawBytes = hexToBytes(hex);"
-                    
-                    // 2. DEBUGGING: Print first 16 bytes to Console
-                    "var debugBytes = Array.from(rawBytes.slice(0, 16)).map(b => b.toString(16).padStart(2,'0').toUpperCase()).join(' ');"
-                    "console.log('DEBUG First 16 Bytes:', debugBytes);"
-
-                    // 3. Calculate Hash on Raw Bytes
                     "var hashHex = await calculateHash(rawBytes);"
                     "console.log('Client Hash:', hashHex);"
 
@@ -194,7 +188,9 @@ const char* index_html =
             "document.getElementById('uploadBtn').disabled = true;"
             "document.getElementById('hexInput').disabled = true;"
             "document.getElementById('fileInput').disabled = true;"
+            "document.getElementById('resetBtn').disabled = true;" // Disable reset during flash
             "document.getElementById('sysState').innerText = 'Starting...';"
+            
             "fetch('/api/flash', { method: 'POST' })"
             ".then(r => { if(r.ok) return r.json(); throw new Error('Busy'); })"
             ".then(d => {"
@@ -207,7 +203,18 @@ const char* index_html =
                 "document.getElementById('uploadBtn').disabled = false;"
                 "document.getElementById('hexInput').disabled = false;"
                 "document.getElementById('fileInput').disabled = false;"
+                "document.getElementById('resetBtn').disabled = false;"
             "});"
+        "}"
+
+        "function resetSystem() {"
+            "if(!confirm('Reset System and Clear Buffer?')) return;"
+            "fetch('/api/reset', { method: 'POST' })"
+            ".then(r => r.json())"
+            ".then(d => {"
+                "alert('System Reset!');"
+                "window.location.reload();" // Simplest way to reset UI is reload
+            "}).catch(e => alert('Reset Failed: ' + e));"
         "}"
 
         "function pollStatus() {"
@@ -229,6 +236,7 @@ const char* index_html =
                     "document.getElementById('hexInput').disabled = false;"
                     "document.getElementById('fileInput').disabled = false;"
                     "document.getElementById('flashBtn').disabled = true;"
+                    "document.getElementById('resetBtn').disabled = false;"
                     "if(d.status.includes('Success')) alert('Update Complete Successfully!');"
                     "else alert('Update Failed: ' + d.status);"
                 "}"
