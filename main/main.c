@@ -1,3 +1,13 @@
+/*
+ * -------------------------------------------------------------------
+ * Project:      ESP32 BMS OTA Gateway
+ * Author:       Miyuru Lakshan
+ * Employee ID:  E2237
+ * Date:         December 2025
+ */
+
+
+
 #include "nvs_flash.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
