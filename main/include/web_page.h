@@ -1,157 +1,241 @@
 #ifndef WEB_PAGE_H
 #define WEB_PAGE_H
 
-const char index_html[] = R"rawliteral(
-<!DOCTYPE HTML><html>
-<head>
-  <title>ESP32 BMS OTA</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body { font-family: Arial, sans-serif; text-align: center; margin: 40px; }
-    h2 { color: #333; }
-    #progressBar { width: 100%; background-color: #f1f1f1; border-radius: 5px; margin-top: 20px; }
-    #bar { width: 0%; height: 30px; background-color: #4CAF50; border-radius: 5px; text-align: center; line-height: 30px; color: white; transition: width 0.3s; }
-    .btn { background-color: #008CBA; border: none; color: white; padding: 15px 32px; font-size: 16px; margin: 10px; cursor: pointer; border-radius: 4px; }
-    .btn:hover { background-color: #007399; }
-    .btn:disabled { background-color: #ccc; cursor: not-allowed; }
-    input[type=file] { padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
-  </style>
-</head>
-<body>
-  <h2>BMS Firmware Updater</h2>
-  <p>Select your Firmware Text File (.txt / .hex)</p>
-  
-  <input type="file" id="firmware_file" accept=".txt,.hex"><br><br>
-  
-  <button class="btn" id="btnUpload" onclick="uploadFirmware()">1. Upload & Verify</button>
-  <button class="btn" id="btnFlash" onclick="flashFirmware()" disabled>2. Flash to BMS</button>
-  
-  <div id="progressBar"><div id="bar">0%</div></div>
-  <p id="status">Status: Idle</p>
+const char* index_html = 
+"<!DOCTYPE html>"
+"<html>"
+"<head>"
+    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+    "<title>ESP32 BMS Flasher</title>"
+    "<style>"
+        "* { margin: 0; padding: 0; box-sizing: border-box; }"
+        "body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #fff; padding: 20px; }"
+        ".container { max-width: 800px; margin: 0 auto; }"
+        "h1 { text-align: center; color: #00ff88; margin-bottom: 20px; font-size: 24px; }"
+        ".card { background: #252525; padding: 20px; border-radius: 10px; border: 1px solid #333; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }"
+        "h2 { font-size: 18px; border-bottom: 1px solid #444; padding-bottom: 10px; margin-bottom: 15px; color: #ccc; }"
+        "textarea { width: 100%; padding: 12px; background: #161625; color: #0f0; border: 1px solid #444; border-radius: 5px; font-family: monospace; resize: vertical; margin-top: 10px; }"
+        ".file-input-wrapper { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }"
+        "input[type='file'] { background: #333; color: #fff; padding: 8px; border-radius: 5px; border: 1px solid #555; width: 100%; cursor: pointer; }"
+        ".btn { background: #00ff88; color: #000; padding: 12px; border: none; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; font-size: 16px; margin-top: 15px; transition: 0.2s; }"
+        ".btn:hover { background: #00cc6a; }"
+        ".btn:disabled { background: #555; color: #888; cursor: not-allowed; }"
+        ".progress-bg { width: 100%; background-color: #444; border-radius: 5px; margin-top: 15px; height: 30px; overflow: hidden; position: relative; }"
+        ".progress-fill { width: 0%; height: 100%; background-color: #00ff88; transition: width 0.5s; }"
+        ".progress-text { position: absolute; width: 100%; height: 100%; top: 0; left: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; mix-blend-mode: difference; }"
+        ".status-row { display: flex; justify-content: space-between; margin-top: 10px; font-family: monospace; color: #aaa; font-size: 14px; }"
+        ".highlight { color: #00ff88; }"
+    "</style>"
+"</head>"
+"<body>"
+    "<div class='container'>"
+        "<h1>Vega BMS Updater</h1>"
+        "<div class='card'>"
+            "<h2>1. Upload Firmware as txt or paste in the box</h2>"
+            "<div class='file-input-wrapper'>"
+                "<input type='file' id='fileInput' accept='.txt,.hex,.csv'>"
+            "</div>"
+            "<textarea id='hexInput' rows='8' placeholder='Select a file above OR Paste Data Here...'></textarea>"
+            "<button class='btn' id='uploadBtn' onclick='uploadFirmware()'>Upload & Verify</button>"
+            "<div class='status-row'>"
+                "<span>Status: <span id='uploadStatus' class='highlight'>Idle</span></span>"
+                "<span>RAM Usage: <span id='ramSize'>0</span> bytes</span>"
+            "</div>"
+        "</div>"
+        "<div class='card'>"
+            "<h2>2. Update the BMS</h2>"
+            "<p style='color:#888; font-size: 13px; margin-bottom: 10px;'>Ensure CAN bus is connected before starting.</p>"
+            "<button class='btn' id='flashBtn' onclick='startFlash()' disabled>Start Update</button>"
+            "<div class='progress-bg'>"
+                "<div id='progressBar' class='progress-fill'></div>"
+                "<div id='progressText' class='progress-text'>0%</div>"
+            "</div>"
+            "<div class='status-row'>"
+                "<span>System: <span id='sysState' class='highlight'>Idle</span></span>"
+                "<span>Progress: <span id='sentBytes'>0</span> / <span id='totalBytes'>0</span></span>"
+            "</div>"
+        "</div>"
+    "</div>"
 
-  <script>
-    // --- SHA-256 IMPLEMENTATION (Pure JS) ---
-    var sha256=function a(b){function c(a,b){return a>>>b|a<<32-b}for(var d,e,f=Math.pow,g=f(2,32),h="length",i="",j=[],k=8*b[h],l=a.h=a.h||[],m=a.k=a.k||[],n=m[h],o={},p=2;64>n;p++)if(!o[p]){for(d=0;313>d;d+=p)o[d]=p;l[n]=f(p,.5)*g|0,m[n++]=f(p,1/3)*g|0}for(b+="\x80";b[h]%64-56;)b+="\x00";for(d=0;d<b[h];d++){if(e=b.charCodeAt(d),e>>8)return;j[d>>2]|=e<<(3-d)%4*8}for(j[j[h]]=k/g|0,j[j[h]]=k,e=0;e<j[h];){var q=l.slice(d=0),r=j.slice(e,e+=16),s=q;for(a.h=q;64>d;d++)q=s[7]+(c(d=s[4],6)^c(d,11)^c(d,25))+(d&s[5]^~d&s[6])+m[d]+(r[d]=16>d?r[d]:r[d-2]+(c(d=r[d-15],7)^c(d,18)^d>>>3)+r[d-7]+(c(d=r[d-2],17)^c(d,19)^d>>>10)|0),s=[q+((c(d=s[0],2)^c(d,13)^c(d,22))+(d&s[1]^d&s[2]^s[1]&s[2]))|0].concat(s),s[4]=s[4]+q|0;for(d=0;8>d;d++)for(e=3;e+1;e--){var t=l[d]>>8*e&255;i+=(16>t?0:"")+t.toString(16)}return i};
-    // ----------------------------------------
+    "<script>"
+        // --- 1. HEX TO BYTES (Fixed: returns Uint8Array) ---
+        "function hexToBytes(hex) {"
+            "if (hex.length % 2 !== 0) throw new Error('Odd hex length');"
+            "var bytes = new Uint8Array(hex.length / 2);"
+            "for (var i = 0; i < hex.length; i += 2) {"
+                "bytes[i / 2] = parseInt(hex.substr(i, 2), 16);"
+            "}"
+            "return bytes;"
+        "}"
 
-    function updateStatus(msg) {
-      document.getElementById("status").innerText = "Status: " + msg;
-    }
-
-    // Helper: Hex String to Binary String (for hashing)
-    function hexToBinaryString(hex) {
-        var str = '';
-        for (var i = 0; i < hex.length; i += 2) {
-            str += String.fromCharCode(parseInt(hex.substr(i, 2), 16));
-        }
-        return str;
-    }
-
-    // 1. READ TEXT -> CLEAN -> HASH -> UPLOAD
-    function uploadFirmware() {
-      var fileInput = document.getElementById('firmware_file');
-      var file = fileInput.files[0];
-      if (!file) { alert("Please select a file"); return; }
-
-      document.getElementById("btnUpload").disabled = true;
-      updateStatus("Reading file...");
-      
-      var reader = new FileReader();
-      
-      // Changed to readAsText for .txt/.hex files
-      reader.onload = function(e) {
-        var rawText = e.target.result;
+        // --- 2. ROBUST SHA-256 (Fixed: Accepts Uint8Array directly) ---
+        "async function calculateHash(byteArray) {"
+            // Use browser crypto API if available (Secure Context / Localhost)
+            "if (window.crypto && window.crypto.subtle) {"
+                "const hashBuffer = await crypto.subtle.digest('SHA-256', byteArray);"
+                "const hashArray = Array.from(new Uint8Array(hashBuffer));"
+                "return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');"
+            "}"
+            // Fallback for HTTP (Pure JS)
+            "else {"
+                "return sha256_fallback(byteArray);"
+            "}"
+        "}"
         
-        // 1. CLEANUP: Remove any whitespace, newlines, or carriage returns
-        // This ensures we have a pure stream of "AABB01..."
-        var cleanHex = rawText.replace(/[^0-9A-Fa-f]/g, '');
+        // Pure JS Fallback (Modified to handle Uint8Array input correctly)
+        "var sha256_fallback = function(data) {"
+            "function rightRotate(value, amount) { return (value>>>amount) | (value<<(32 - amount)); };"
+            "var mathPow = Math.pow; var maxWord = mathPow(2, 32); "
+            "var i, j; var result = ''; var words = []; var asciiBitLength = data.length * 8;"
+            "var hash = [0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19];"
+            "var k = [0x428A2F98, 0x71374491, 0xB5C0FBCF, 0xE9B5DBA5, 0x3956C25B, 0x59F111F1, 0x923F82A4, 0xAB1C5ED5, 0xD807AA98, 0x12835B01, 0x243185BE, 0x550C7DC3, 0x72BE5D74, 0x80DEB1FE, 0x9BDC06A7, 0xC19BF174, 0xE49B69C1, 0xEFBE4786, 0x0FC19DC6, 0x240CA1CC, 0x2DE92C6F, 0x4A7484AA, 0x5CB0A9DC, 0x76F988DA, 0x983E5152, 0xA831C66D, 0xB00327C8, 0xBF597FC7, 0xC6E00BF3, 0xD5A79147, 0x06CA6351, 0x14292967, 0x27B70A85, 0x2E1B2138, 0x4D2C6DFC, 0x53380D13, 0x650A7354, 0x766A0ABB, 0x81C2C92E, 0x92722C85, 0xA2BFE8A1, 0xA81A664B, 0xC24B8B70, 0xC76C51A3, 0xD192E819, 0xD6990624, 0xF40E3585, 0x106AA070, 0x19A4C116, 0x1E376C08, 0x2748774C, 0x34B0BCB5, 0x391C0CB3, 0x4ED8AA4A, 0x5B9CCA4F, 0x682E6FF3, 0x748F82EE, 0x78A5636F, 0x84C87814, 0x8CC70208, 0x90BEFFFA, 0xA4506CEB, 0xBEF9A3F7, 0xC67178F2];"
+            "var combined = new Uint8Array(data.length + 1 + 8 + (64 - (data.length + 9) % 64));"
+            "combined.set(data); combined[data.length] = 0x80;"
+            "var view = new DataView(combined.buffer); view.setUint32(combined.length - 4, asciiBitLength, false);"
+            "for (i = 0; i < combined.length; i+=4) words[i>>2] = view.getUint32(i, false);"
+            "for (j = 0; j < words.length;) {"
+                "var w = words.slice(j, j += 16);"
+                "var oldHash = hash;"
+                "hash = hash.slice(0); "
+                "for (i = 0; i < 64; i++) {"
+                    "var i2 = i + j;"
+                    "var w15 = w[i - 15], w2 = w[i - 2];"
+                    "var a = hash[0], e = hash[4];"
+                    "var temp1 = hash[7] + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)) + ((e&hash[5])^((~e)&hash[6])) + k[i] + (w[i] = (i < 16) ? w[i] : (w[i - 16] + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15>>>3)) + w[i - 7] + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2>>>10))) | 0);"
+                    "var temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) + ((a&hash[1])^(a&hash[2])^(hash[1]&hash[2]));"
+                    "hash = [(temp1 + temp2)|0].concat(hash);"
+                    "hash[4] = (hash[4] + temp1)|0;"
+                "}"
+                "for (i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i])|0;"
+            "}"
+            "for (i = 0; i < 8; i++) {"
+                "for (j = 3; j + 1; j--) {"
+                    "var b = (hash[i]>>(j*8))&255;"
+                    "result += ((b < 16) ? 0 : '') + b.toString(16);"
+                "}"
+            "}"
+            "return result;"
+        "};"
 
-        if (cleanHex.length % 2 !== 0) {
-            alert("Error: Hex string length is odd. Corrupted file?");
-            document.getElementById("btnUpload").disabled = false;
-            return;
-        }
-
-        // 2. CONVERT TO BINARY STRING FOR HASHING
-        // We must hash the BINARY values, not the Hex ASCII characters
-        updateStatus("Calculating SHA-256...");
-        var binaryString = hexToBinaryString(cleanHex);
-        var hashHex = sha256(binaryString);
+        "let isFlashing = false;"
+        "let pollInterval = null;"
         
-        console.log("Clean Hex Length:", cleanHex.length);
-        console.log("Client Hash:", hashHex);
+        "document.getElementById('fileInput').addEventListener('change', function(e) {"
+            "let file = e.target.files[0];"
+            "if (!file) return;"
+            "let reader = new FileReader();"
+            "reader.onload = function(e) {"
+                "document.getElementById('hexInput').value = e.target.result;"
+                "alert('File loaded! Click Upload & Verify to proceed.');"
+            "};"
+            "reader.readAsText(file);"
+        "});"
 
-        // 3. UPLOAD THE CLEAN HEX STRING
-        updateStatus("Uploading...");
-        var xhr = new XMLHttpRequest();
-        xhr.open("POST", "/api/upload", true);
-        
-        // Header matches the Binary Hash
-        xhr.setRequestHeader("X-Payload-SHA256", hashHex); 
-        
-        xhr.onload = function() {
-          document.getElementById("btnUpload").disabled = false;
-          if (xhr.status === 200) {
-            var resp = JSON.parse(xhr.responseText);
-            updateStatus("Verified! Size: " + resp.size + " bytes. Ready to Flash.");
-            document.getElementById("bar").style.width = "100%";
-            document.getElementById("bar").innerHTML = "100%";
-            document.getElementById("btnFlash").disabled = false;
-          } else {
-            updateStatus("Error: " + xhr.statusText);
-            alert("Upload Failed: " + xhr.responseText);
-          }
-        };
-        
-        xhr.send(cleanHex);
-      };
-      
-      reader.readAsText(file);
-    }
+        "function cleanHex(input) {"
+            "let clean = input.replace(/0x/gi, '');"
+            "clean = clean.replace(/[^0-9A-Fa-f]/g, '');"
+            "return clean;"
+        "}"
 
-    function flashFirmware() {
-      var xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/flash", true);
-      xhr.onload = function() {
-        if (xhr.status === 200) {
-          updateStatus("Flashing Started...");
-          document.getElementById("btnFlash").disabled = true;
-          startPolling();
-        } else {
-          alert("Failed to start flash");
-        }
-      };
-      xhr.send();
-    }
-
-    function startPolling() {
-      var interval = setInterval(function() {
-        var xhr = new XMLHttpRequest();
-        xhr.open("GET", "/api/status", true);
-        xhr.onload = function() {
-          if (xhr.status === 200) {
-            var json = JSON.parse(xhr.responseText);
-            updateStatus(json.status);
+        "function uploadFirmware() {"
+            "let raw = document.getElementById('hexInput').value;"
+            "let hex = cleanHex(raw);"
             
-            if (json.total > 0) {
-              var percent = (json.sent / json.total) * 100;
-              document.getElementById("bar").style.width = percent + "%";
-              document.getElementById("bar").innerHTML = Math.round(percent) + "%";
-            }
+            "if(hex.length % 2 !== 0 || hex.length === 0) { alert('Invalid Data (Odd length)! Check your input.'); return; }"
+            "if(hex.length > 300000) { alert('File too large (>150KB binary)!'); return; }"
+            
+            "document.getElementById('uploadBtn').disabled = true;"
+            "document.getElementById('uploadStatus').innerText = 'Calculating Hash...';"
+            
+            "setTimeout(async function() {"
+                // 1. Convert HEX String -> Uint8Array (Raw Bytes)
+                "try {"
+                    "var rawBytes = hexToBytes(hex);"
+                    
+                    // 2. DEBUGGING: Print first 16 bytes to Console
+                    "var debugBytes = Array.from(rawBytes.slice(0, 16)).map(b => b.toString(16).padStart(2,'0').toUpperCase()).join(' ');"
+                    "console.log('DEBUG First 16 Bytes:', debugBytes);"
 
-            if (json.busy === false && json.sent >= json.total && json.total > 0) {
-              clearInterval(interval);
-              alert("Update Complete!");
-              document.getElementById("btnFlash").disabled = false;
-            }
-          }
-        };
-        xhr.send();
-      }, 1000);
-    }
-  </script>
-</body>
-</html>
-)rawliteral";
+                    // 3. Calculate Hash on Raw Bytes
+                    "var hashHex = await calculateHash(rawBytes);"
+                    "console.log('Client Hash:', hashHex);"
+
+                    "document.getElementById('uploadStatus').innerText = 'Uploading...';"
+                    
+                    "fetch('/api/upload', {"
+                        "method: 'POST',"
+                        "headers: { 'X-Payload-SHA256': hashHex },"
+                        "body: hex"
+                    "})"
+                    ".then(r => { if(r.ok) return r.json(); throw new Error(r.statusText); })"
+                    ".then(d => {"
+                        "document.getElementById('uploadStatus').innerText = 'Verified & Stored';"
+                        "document.getElementById('ramSize').innerText = d.size;"
+                        "document.getElementById('flashBtn').disabled = false;"
+                        "document.getElementById('uploadBtn').disabled = false;"
+                        "document.getElementById('totalBytes').innerText = d.size;"
+                        "alert('Integrity Check PASSED! Firmware loaded into RAM.');"
+                    "}).catch(e => {"
+                        "document.getElementById('uploadStatus').innerText = 'Error';"
+                        "document.getElementById('uploadBtn').disabled = false;"
+                        "alert('Upload Failed: ' + e);"
+                    "});"
+                "} catch(err) {"
+                    "alert('Error processing file: ' + err);"
+                    "document.getElementById('uploadBtn').disabled = false;"
+                "}"
+            "}, 100);"
+        "}"
+
+        "function startFlash() {"
+            "if(!confirm('Start BMS Update? Do not power off.')) return;"
+            "isFlashing = true;"
+            "document.getElementById('flashBtn').disabled = true;"
+            "document.getElementById('uploadBtn').disabled = true;"
+            "document.getElementById('hexInput').disabled = true;"
+            "document.getElementById('fileInput').disabled = true;"
+            "document.getElementById('sysState').innerText = 'Starting...';"
+            "fetch('/api/flash', { method: 'POST' })"
+            ".then(r => { if(r.ok) return r.json(); throw new Error('Busy'); })"
+            ".then(d => {"
+                "if(pollInterval) clearInterval(pollInterval);"
+                "pollInterval = setInterval(pollStatus, 500);" 
+            "}).catch(e => {"
+                "alert('Could not start flash: ' + e);"
+                "isFlashing = false;"
+                "document.getElementById('flashBtn').disabled = false;"
+                "document.getElementById('uploadBtn').disabled = false;"
+                "document.getElementById('hexInput').disabled = false;"
+                "document.getElementById('fileInput').disabled = false;"
+            "});"
+        "}"
+
+        "function pollStatus() {"
+            "fetch('/api/status')"
+            ".then(r => r.json())"
+            ".then(d => {"
+                "document.getElementById('sysState').innerText = d.status;"
+                "document.getElementById('sentBytes').innerText = d.sent;"
+                "document.getElementById('totalBytes').innerText = d.total;"
+                "let pct = 0;"
+                "if(d.total > 0) pct = Math.round((d.sent / d.total) * 100);"
+                "if(pct > 100) pct = 100;"
+                "document.getElementById('progressBar').style.width = pct + '%';"
+                "document.getElementById('progressText').innerText = pct + '%';"
+                "if (d.busy === false && isFlashing) {"
+                    "clearInterval(pollInterval);"
+                    "isFlashing = false;"
+                    "document.getElementById('uploadBtn').disabled = false;"
+                    "document.getElementById('hexInput').disabled = false;"
+                    "document.getElementById('fileInput').disabled = false;"
+                    "document.getElementById('flashBtn').disabled = true;"
+                    "if(d.status.includes('Success')) alert('Update Complete Successfully!');"
+                    "else alert('Update Failed: ' + d.status);"
+                "}"
+            "}).catch(e => console.log('Poll error', e));"
+        "}"
+    "</script>"
+"</body>"
+"</html>";
 
 #endif

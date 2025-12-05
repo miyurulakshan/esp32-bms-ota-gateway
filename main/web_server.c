@@ -1,13 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>             // Required for toupper/tolower comparisons
+#include <ctype.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "cJSON.h"
-#include "mbedtls/sha256.h"    // Standard ESP-IDF Crypto Library
+#include "mbedtls/sha256.h"
 
-// Assuming these exist in your project structure
+// Assuming these exist in your project
 #include "app_shared.h" 
 #include "web_page.h"
 #include "can_manager.h" 
@@ -37,7 +37,7 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// 1. UPLOAD HANDLER (Modified for SHA-256 Integrity)
+// 1. UPLOAD HANDLER (With SHA-256 Check)
 static esp_err_t upload_post_handler(httpd_req_t *req) {
     if (SYSTEM_IS_BUSY) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "System Busy Flashing");
@@ -45,7 +45,6 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
     }
 
     // 1. GET CHECKSUM HEADER
-    // The browser must calculate SHA-256 of the binary and send it in this header
     char header_hash[65] = {0};
     if (httpd_req_get_hdr_value_str(req, "X-Payload-SHA256", header_hash, sizeof(header_hash)) != ESP_OK) {
         ESP_LOGE(TAG, "Security Error: Missing X-Payload-SHA256 header");
@@ -58,7 +57,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
     int cur_len = 0;
     int received = 0;
     
-    // JS cleans the string, so we assume 2 hex chars = 1 byte
+    // JS sends Hex String (2 chars = 1 byte)
     size_t binary_size = total_len / 2;
 
     // Reset Buffer
@@ -86,7 +85,6 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
     while (cur_len < total_len) {
         received = httpd_req_recv(req, chunk, 1024);
         if (received <= 0) {
-            // Connection closed or error
             free(chunk);
             free(firmware_buffer);
             firmware_buffer = NULL;
@@ -95,12 +93,20 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
 
         // On-the-fly Hex -> Binary Conversion
         for (int i = 0; i < received; i++) {
+            // Filter out non-hex characters (newlines, spaces, etc if any slipped through)
+            char c = chunk[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'))) {
+                continue; 
+            }
+
             if (!have_high) {
-                high_nibble = hex2int(chunk[i]);
+                high_nibble = hex2int(c);
                 have_high = true;
             } else {
-                uint8_t low_nibble = hex2int(chunk[i]);
-                firmware_buffer[binary_idx++] = (high_nibble << 4) | low_nibble;
+                uint8_t low_nibble = hex2int(c);
+                if (binary_idx < binary_size) {
+                    firmware_buffer[binary_idx++] = (high_nibble << 4) | low_nibble;
+                }
                 have_high = false;
             }
         }
@@ -113,13 +119,23 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
     
     ESP_LOGI(TAG, "Download Complete. Size: %d bytes. Verifying Integrity...", firmware_len);
 
-    // 3. CALCULATE SHA-256 OF RECEIVED DATA
+    // --- DEBUG: PRINT FIRST 16 BYTES OF RECEIVED BINARY ---
+    // This helps confirm if the Hex->Binary conversion matched the browser's logic
+    char debug_buf[64] = {0};
+    for (int i = 0; i < 16 && i < firmware_len; i++) {
+        sprintf(&debug_buf[i*3], "%02X ", firmware_buffer[i]);
+    }
+    ESP_LOGW(TAG, "--- DEBUG ---");
+    ESP_LOGW(TAG, "First 16 Bytes in RAM: %s", debug_buf);
+    ESP_LOGW(TAG, "Total Binary Len: %d", firmware_len);
+    // ------------------------------------------------------
+
+    // 3. CALCULATE SHA-256 OF RECEIVED BINARY DATA
     unsigned char local_hash_bin[32];
     mbedtls_sha256_context ctx;
     
     mbedtls_sha256_init(&ctx);
-    // 0 = SHA-256 (not 224)
-    mbedtls_sha256_starts(&ctx, 0); 
+    mbedtls_sha256_starts(&ctx, 0); // 0 = SHA-256
     mbedtls_sha256_update(&ctx, firmware_buffer, firmware_len);
     mbedtls_sha256_finish(&ctx, local_hash_bin);
     mbedtls_sha256_free(&ctx);
@@ -129,12 +145,11 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
     for (int i = 0; i < 32; i++) {
         sprintf(&local_hash_str[i * 2], "%02x", local_hash_bin[i]);
     }
-    local_hash_str[64] = '\0'; // Null terminate
+    local_hash_str[64] = '\0';
 
-    // 5. COMPARE HASHES (Case Insensitive)
+    // 5. COMPARE HASHES
     if (strcasecmp(header_hash, local_hash_str) == 0) {
         ESP_LOGI(TAG, "✅ INTEGRITY PASS: SHA-256 matches.");
-        ESP_LOGI(TAG, "Hash: %s", local_hash_str);
         
         char resp[64];
         snprintf(resp, 64, "{\"status\": \"success\", \"size\": %d}", firmware_len);
@@ -146,7 +161,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req) {
         ESP_LOGE(TAG, "Expected (Browser): %s", header_hash);
         ESP_LOGE(TAG, "Calculated (ESP32): %s", local_hash_str);
 
-        // Security: Discard the corrupted buffer immediately
+        // Security: Discard the corrupted buffer
         free(firmware_buffer);
         firmware_buffer = NULL;
         firmware_len = 0;
@@ -201,8 +216,6 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
 
 httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    // Increase stack size if needed for heavy SHA256 ops, 
-    // though 8192 is usually sufficient.
     config.stack_size = 8192; 
     httpd_handle_t server = NULL;
 
